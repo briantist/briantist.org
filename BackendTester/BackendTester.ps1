@@ -192,3 +192,69 @@ param(
         $r.result
     }
 }
+
+function Test-Backend {
+[CmdletBinding()]
+param(
+    [Parameter(
+        Mandatory,
+        ValueFromPipelineByPropertyName
+    )]
+    [Alias('content')]
+    [System.Net.IPAddress]
+    $IPAddress ,
+
+    [Parameter(
+        Mandatory,
+        ValueFromPipelineByPropertyName
+    )]
+    [Alias('name')]
+    $HostName ,
+
+    [Parameter(
+        Mandatory
+    )]
+    [ValidateNotNullOrEmpty()]
+    [String]
+    $Expect ,
+
+    [Parameter()]
+    [uint16]
+    $TimeoutSeconds = 5 ,
+
+    [uint16]
+    $RetryTimes = 0 ,
+
+    [uint16]
+    $RetryDelay = 5 ,
+
+    [ScriptBlock]
+    $FailureAction
+)
+
+    Process {
+        $rc = 0
+        $v = $false
+        while ($rc -le $RetryTimes) {
+            try {
+                $r = Invoke-WebRequest -Uri "http://$IPAddress" -UseBasicParsing -DisableKeepAlive -TimeoutSec $TimeoutSeconds -Headers @{ Host = $HostName } -MaximumRedirection 0 -ErrorAction Ignore
+                Write-Verbose -Message "Status: $($r.StatusCode)"
+                $v = $r -and $r.StatusCode -eq 200 -and $r.Content -match ([RegEx]::Escape($Expect))
+                if ($v) {
+                    break
+                }
+            } catch {
+                Write-Verbose -Message "Catch?"
+                $_ | Out-String | Write-Verbose
+            }
+            if ($rc++ -lt $RetryTimes) {
+                Write-Verbose -Message "Retrying; attempt $rc of $RetryTimes. Waiting $RetryDelay seconds..."
+                Start-Sleep -Seconds $RetryDelay
+            }
+        }
+        if ($FailureAction -and !$v) {
+            & $FailureAction
+        }
+        $v
+    }
+}
