@@ -1,10 +1,5 @@
 #Requires -Version 4.0
 
-$PSDefaultParameterValues = @{
-    "Get-CF*:Base" =  'https://api.cloudflare.com/client/v4'
-}
-
-
 function Join-Uri {
 [CmdletBinding(DefaultParameterSetName='ByParam')]
 param(
@@ -66,7 +61,17 @@ param(
     $Credential ,
 
     [Hashtable]
-    $Body
+    $Body ,
+
+    [ValidateSet(
+         'Get'
+        ,'Post'
+        ,'Put'
+        ,'Patch'
+        ,'Delete'
+    )]
+    [String]
+    $Method = 'Get'
 )
 
 
@@ -74,7 +79,7 @@ param(
 
     $param = @{
         Uri = $u
-        Method = 'Get'
+        Method = $Method
         Headers = ConvertTo-CFAuth $Credential
     }
 
@@ -258,3 +263,148 @@ param(
         $v
     }
 }
+
+function Remove-CFDnsRecord {
+[CmdletBinding(SupportsShouldProcess)]
+param(
+    [Parameter(Mandatory)]
+    [Uri]
+    $Base ,
+
+    [Parameter(Mandatory)]
+    [PSCredential]
+    $Credential ,
+
+    [Parameter(
+        Mandatory,
+        ValueFromPipelineByPropertyName
+    )]
+    [Alias('zone_id')]
+    [ValidatePattern('^[a-fA-F0-9]+$')]
+    [String]
+    $ZoneId ,
+
+    [Parameter(
+        Mandatory,
+        ValueFromPipelineByPropertyName
+    )]
+    [Alias('id')]
+    [ValidateNotNullOrEmpty()]
+    [ValidatePattern('^[a-fA-F0-9]+$')]
+    [String]
+    $Identifier
+)
+
+    Process {
+        $param = @{
+            Base = $Base | Join-Uri 'zones' | Join-Uri $ZoneId | Join-Uri 'dns_records' | Join-Uri $Identifier
+            Credential = $Credential
+            Method = 'Delete'
+        }
+
+        if ($PSCmdlet.ShouldProcess($Base)) {
+            Write-Verbose -Message "Deleting DNS record with ID '$Identifier' in Zone ID '$ZoneId'"
+            $r = Invoke-CFRequest @param
+            $r.result.id
+        }
+    }
+}
+
+function Add-CFDnsRecord {
+[CmdletBinding(SupportsShouldProcess)]
+param(
+    [Parameter(Mandatory)]
+    [Uri]
+    $Base ,
+
+    [Parameter(Mandatory)]
+    [PSCredential]
+    $Credential ,
+
+    [Parameter(
+        Mandatory,
+        ValueFromPipeline,
+        ValueFromPipelineByPropertyName
+    )]
+    [Alias('zone_id')]
+    [ValidatePattern('^[a-fA-F0-9]+$')]
+    [String]
+    $ZoneId ,
+
+    [Parameter(
+        Mandatory
+    )]
+    [ValidateSet(
+         'A'
+        ,'AAAA'
+        ,'CNAME'
+        ,'TXT'
+        ,'SRV'
+        ,'LOC'
+        ,'MX'
+        ,'NS'
+        ,'SPF'
+    )]
+    [String]
+    $Type ,
+
+    [Parameter(
+        Mandatory
+    )]
+    [String]
+    $Name ,
+
+    [Parameter(
+        Mandatory
+    )]
+    [String]
+    $Content ,
+
+    [uint32]
+    $TTL
+)
+
+    Begin {
+        $param = @{
+            Base = $Base | Join-Uri 'zones' | Join-Uri $ZoneId | Join-Uri 'dns_records'
+            Credential = $Credential
+            Method = 'Post'
+        }
+    }
+
+    Process {
+        $body = @{
+            type = $Type
+            name = $Name
+            content = $Content
+        }
+        if ($TTL) {
+            $body.ttl = $TTL
+        }
+        $param.Body = $body
+
+        if ($PSCmdlet.ShouldProcess($Name)) {
+            Write-Verbose -Message "Adding DNS record parameters:"
+            $param | Out-String | Write-Verbose
+
+            $r = Invoke-CFRequest @param
+            $rid = $r.result.id
+
+            Write-Verbose -Message "Created record ID '$rid'. Enabling Proxy."
+
+            $param.Base = $param.Base | Join-Uri $rid
+            $param.Method = 'Patch'
+            $param.Body.proxied = $true
+            $r = Invoke-CFRequest @param
+            $r.result
+        }
+    }
+}
+
+
+$PSDefaultParameterValues = @{
+    "Get-CF*:Base" =  'https://api.cloudflare.com/client/v4'
+}
+
+$backends = Import-Clixml -Path ($PSScriptRoot | Join-Path -ChildPath 'backends.xml')
+
