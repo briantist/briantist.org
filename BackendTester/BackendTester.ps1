@@ -1,4 +1,12 @@
 #Requires -Version 4.0
+[CmdletBinding()]
+param(
+    [Switch]
+    $Repeat ,
+
+    [uint16]
+    $Sleep = 60
+)
 
 function Join-Uri {
 [CmdletBinding(DefaultParameterSetName='ByParam')]
@@ -84,12 +92,23 @@ param(
     }
 
     if ($Body) {
-        $param.Body = $Body
+        if ($Method -ieq 'Get') {
+            $param.Body = $Body
+        } else {
+            $param.Body = $Body | ConvertTo-Json
+            $param.ContentType = 'application/json'
+        }
     }
 
-    $r = Invoke-RestMethod @param -ErrorAction Stop
+    try {
+        $r = Invoke-RestMethod @param -ErrorAction Stop
+    } catch [System.Net.WebException] {
+        if ($_.Exception.Status -eq [System.Net.WebExceptionStatus]::SecureChannelFailure) {
+            $r = Invoke-RestMethod @param -ErrorAction Ignore
+        }
+    }
 
-    if ($r.Success) {
+    if ($r -and $r.Success) {
         $r
     } else {
         throw $r
@@ -364,15 +383,13 @@ param(
     $TTL
 )
 
-    Begin {
+    Process {
         $param = @{
             Base = $Base | Join-Uri 'zones' | Join-Uri $ZoneId | Join-Uri 'dns_records'
             Credential = $Credential
             Method = 'Post'
         }
-    }
 
-    Process {
         $body = @{
             type = $Type
             name = $Name
@@ -385,7 +402,7 @@ param(
 
         if ($PSCmdlet.ShouldProcess($Name)) {
             Write-Verbose -Message "Adding DNS record parameters:"
-            $param | Out-String | Write-Verbose
+            $param.Body | Out-String | Write-Verbose
 
             $r = Invoke-CFRequest @param
             $rid = $r.result.id
@@ -404,7 +421,36 @@ param(
 
 $PSDefaultParameterValues = @{
     "Get-CF*:Base" =  'https://api.cloudflare.com/client/v4'
+    "Add-CF*:Base" =  'https://api.cloudflare.com/client/v4'
+    "Remove-CF*:Base" =  'https://api.cloudflare.com/client/v4'
 }
 
 $backends = Import-Clixml -Path ($PSScriptRoot | Join-Path -ChildPath 'backends.xml')
 
+if (!$cred) {
+    $cred = Get-Credential
+}
+
+$zid = Get-CFZoneId -Credential $cred -Name 'briantist.org'
+
+
+
+do {
+    $curbacks = $zid | Get-CFZoneDnsRecord -Credential $cred -Type A
+    $backends | ForEach-Object {
+        foreach ($ip in $_.IPAddress) {
+            if (Test-Backend -IPAddress $ip -HostName 'www.briantist.org' -Expect '2c9d5944-bb11-48b1-9e24-ac2d8d661dbc' -RetryTimes 3 -RetryDelay 1) {
+                if ($ip.IPAddressToString -notin $curbacks.content) {
+                    Write-Verbose "Adding $($_.Name) backend ($ip)" -Verbose
+                    $zid | Add-CFDnsRecord -Credential $cred -Type A -Name '@' -Content $ip.IPAddressToString -TTL 120 | Out-Null
+                }
+            } else {
+                if ($ip.IPAddressToString -in $curbacks.content) {
+                    Write-Verbose "Removing $($_.Name) backend ($ip)" -Verbose
+                    $curbacks | Where-Object { $_.content -eq $ip.IPAddressToString } | Remove-CFDnsRecord -Credential $cred | Out-Null
+                }
+            }
+        }
+    }
+    Start-Sleep -Seconds $Sleep
+} while ($Repeat)
