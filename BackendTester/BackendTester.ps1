@@ -5,7 +5,10 @@ param(
     $Repeat ,
 
     [uint16]
-    $Sleep = 60
+    $Sleep = 60 ,
+
+    [pscredential]
+    $Credential = (Get-Credential)
 )
 
 function Join-Uri {
@@ -427,9 +430,10 @@ $PSDefaultParameterValues = @{
 
 $backends = Import-Clixml -Path ($PSScriptRoot | Join-Path -ChildPath 'backends.xml')
 
-if (!$cred) {
-    $cred = Get-Credential
-}
+#if (!$cred) {
+#    $cred = Get-Credential
+#}
+$cred = $Credential
 
 $zid = Get-CFZoneId -Credential $cred -Name 'briantist.org'
 
